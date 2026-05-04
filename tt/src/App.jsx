@@ -71,9 +71,9 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 // ── ZOOM API CONFIG ──────────────────────────────────────────────────────────
 // Paste your credentials from https://marketplace.zoom.us (Server-to-Server OAuth)
-const ZOOM_ACCOUNT_ID    = "GltBoA3-S9253C3P7le-0w";   // ← replace
-const ZOOM_CLIENT_ID     = "esD9Gfz4SzOlI0_n2rkXQ";    // ← replace
-const ZOOM_CLIENT_SECRET = "xyksus44hljdynQHu3HDbkaDpsrKs8Eq"; // ← replace
+// const ZOOM_ACCOUNT_ID    = "GltBoA3-S9253C3P7le-0w";   // ← replace
+// const ZOOM_CLIENT_ID     = "esD9Gfz4SzOlI0_n2rkXQ";    // ← replace
+// const ZOOM_CLIENT_SECRET = "xyksus44hljdynQHu3HDbkaDpsrKs8Eq"; // ← replace
 
 // Set to true once you've filled in real credentials above
 const ZOOM_API_ENABLED = true;
@@ -181,55 +181,73 @@ async function getZoomAccessToken() {
  * Step 2: Create a scheduled Zoom meeting under the mentor's Zoom account.
  * mentorEmail must match the email registered with your Zoom account.
  */
+// async function createZoomMeeting(mentorEmail, learnerName, skill) {
+//   if (!ZOOM_API_ENABLED) {
+//     // Return a fallback link so the rest of the flow still works during dev
+//     return generateFallbackZoomLink(skill);
+//   }
+//   try {
+//     const token = await getZoomAccessToken();
+//     const body = {
+//       topic: `TT Session: ${skill}`,
+//       type: 2,                                   // scheduled meeting
+//       start_time: new Date(Date.now() + 5 * 60000).toISOString(),
+//       duration: 60,
+//       timezone: "Asia/Kolkata",
+//       agenda: `1-on-1 session: ${skill} — learner: ${learnerName}`,
+//       settings: {
+//         host_video: true,
+//         participant_video: true,
+//         join_before_host: false,
+//         waiting_room: true,
+//         mute_upon_entry: false,
+//         auto_recording: "none",
+//       },
+//     };
+
+//     const res = await fetch(`https://api.zoom.us/v2/users/${mentorEmail}/meetings`, {
+//       method: "POST",
+//       headers: {
+//         Authorization: `Bearer ${token}`,
+//         "Content-Type": "application/json",
+//       },
+//       body: JSON.stringify(body),
+//     });
+
+//     if (!res.ok) {
+//       const err = await res.json().catch(() => ({}));
+//       throw new Error(err.message || "Zoom meeting creation failed");
+//     }
+
+//     const meeting = await res.json();
+//     return {
+//       meetingId: String(meeting.id),
+//       joinUrl:   meeting.join_url,
+//       startUrl:  meeting.start_url,
+//       password:  meeting.password || "",
+//     };
+//   } catch (err) {
+//     console.error("[Zoom API]", err);
+//     throw err;
+//   }
+// }
+// ── paste your worker URL here ──────────────────────────────────────────────
+const ZOOM_WORKER_URL = "https://tt-zoom-proxy.rajeshwarisons3134.workers.dev/";
+
 async function createZoomMeeting(mentorEmail, learnerName, skill) {
-  if (!ZOOM_API_ENABLED) {
-    // Return a fallback link so the rest of the flow still works during dev
-    return generateFallbackZoomLink(skill);
+  const res = await fetch(ZOOM_WORKER_URL, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ mentorEmail, learnerName, skill }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || err.error || "Zoom worker request failed");
   }
-  try {
-    const token = await getZoomAccessToken();
-    const body = {
-      topic: `TT Session: ${skill}`,
-      type: 2,                                   // scheduled meeting
-      start_time: new Date(Date.now() + 5 * 60000).toISOString(),
-      duration: 60,
-      timezone: "Asia/Kolkata",
-      agenda: `1-on-1 session: ${skill} — learner: ${learnerName}`,
-      settings: {
-        host_video: true,
-        participant_video: true,
-        join_before_host: false,
-        waiting_room: true,
-        mute_upon_entry: false,
-        auto_recording: "none",
-      },
-    };
 
-    const res = await fetch(`https://api.zoom.us/v2/users/${mentorEmail}/meetings`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || "Zoom meeting creation failed");
-    }
-
-    const meeting = await res.json();
-    return {
-      meetingId: String(meeting.id),
-      joinUrl:   meeting.join_url,
-      startUrl:  meeting.start_url,
-      password:  meeting.password || "",
-    };
-  } catch (err) {
-    console.error("[Zoom API]", err);
-    throw err;
-  }
+  return await res.json();
+  // returns → { meetingId, joinUrl, startUrl, password }
 }
 
 /** Fallback used during development or when ZOOM_API_ENABLED = false */
