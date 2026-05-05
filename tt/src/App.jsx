@@ -1,20 +1,3 @@
-// ╔══════════════════════════════════════════════════════════════════════════╗
-// ║  TT — Time Trade  |  Zoom via CF Worker + Delete approved requests      ║
-// ╚══════════════════════════════════════════════════════════════════════════╝
-//
-// ── SETUP CHECKLIST ──────────────────────────────────────────────────────────
-// 1. Deploy cloudflare-worker.js to Cloudflare Workers (see that file)
-// 2. Paste your Worker URL into ZOOM_PROXY_URL below (line ~60)
-// 3. Supabase: make sure these columns exist in "requests" table:
-//      course_id text, course_title text,
-//      zoom_meeting_id text, zoom_password text
-//    SQL: ALTER TABLE requests
-//           ADD COLUMN IF NOT EXISTS course_id text,
-//           ADD COLUMN IF NOT EXISTS course_title text,
-//           ADD COLUMN IF NOT EXISTS zoom_meeting_id text,
-//           ADD COLUMN IF NOT EXISTS zoom_password text;
-// ─────────────────────────────────────────────────────────────────────────────
-
 import {
   useState, useEffect, useContext, createContext,
   useRef, useCallback,
