@@ -1,48 +1,34 @@
 // ╔══════════════════════════════════════════════════════════════════════════╗
-// ║  TT — Time Trade  |  Fixed: course_id schema + Zoom API setup guide     ║
+// ║  TT — Time Trade  |  Zoom via CF Worker + Delete approved requests      ║
 // ╚══════════════════════════════════════════════════════════════════════════╝
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ZOOM API SETUP — READ THIS FIRST
-// ─────────────────────────────────────────────────────────────────────────────
-// 1. Go to https://marketplace.zoom.us/develop/create
-// 2. Choose "Server-to-Server OAuth" app type
-// 3. Fill in app name → click Create
-// 4. From "App Credentials" tab, copy:
-//      Account ID   → paste into ZOOM_ACCOUNT_ID below
-//      Client ID    → paste into ZOOM_CLIENT_ID below
-//      Client Secret → paste into ZOOM_CLIENT_SECRET below
-// 5. Go to "Scopes" tab → Add scope: meeting:write:admin  AND  meeting:write
-// 6. Activate the app (toggle at top right)
 //
-// SUPABASE — Add these columns to your "requests" table if missing:
-//   course_id      text   (nullable)
-//   course_title   text   (nullable)
-//   zoom_meeting_id text  (nullable)
-//   zoom_password   text  (nullable)
-//
-//   Run in Supabase SQL editor:
-//   ALTER TABLE requests
-//     ADD COLUMN IF NOT EXISTS course_id      text,
-//     ADD COLUMN IF NOT EXISTS course_title   text,
-//     ADD COLUMN IF NOT EXISTS zoom_meeting_id text,
-//     ADD COLUMN IF NOT EXISTS zoom_password   text;
+// ── SETUP CHECKLIST ──────────────────────────────────────────────────────────
+// 1. Deploy cloudflare-worker.js to Cloudflare Workers (see that file)
+// 2. Paste your Worker URL into ZOOM_PROXY_URL below (line ~60)
+// 3. Supabase: make sure these columns exist in "requests" table:
+//      course_id text, course_title text,
+//      zoom_meeting_id text, zoom_password text
+//    SQL: ALTER TABLE requests
+//           ADD COLUMN IF NOT EXISTS course_id text,
+//           ADD COLUMN IF NOT EXISTS course_title text,
+//           ADD COLUMN IF NOT EXISTS zoom_meeting_id text,
+//           ADD COLUMN IF NOT EXISTS zoom_password text;
 // ─────────────────────────────────────────────────────────────────────────────
 
 import {
   useState, useEffect, useContext, createContext,
-  useRef, useCallback, memo,
+  useRef, useCallback,
 } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Flame, CheckCircle, XCircle, Video, LogOut, User, Bell,
-  Zap, ArrowRight, Search, Award, Loader2, MessageSquare,
+  Zap, Search, Award, Loader2, MessageSquare,
   AlertTriangle, Coins, Globe, X, Check, Plus,
   BookOpen, Code2, Database, Cpu, Palette, TrendingUp,
-  Music, Camera, PenLine, Lock, FileText, Star, Clock,
-  ChevronRight, Sparkles, Crown, Shield, Hash, Calendar,
+  Music, Camera, PenLine, Star, Clock,
+  ChevronRight, Sparkles, Shield, Hash, Calendar,
   ExternalLink, RefreshCw, LayoutDashboard, Upload, Trash2,
-  Edit3, Image as ImageIcon,
+  Image as ImageIcon,
 } from "lucide-react";
 import { initializeApp, getApps } from "firebase/app";
 import {
@@ -54,7 +40,7 @@ import {
 } from "firebase/database";
 import { createClient } from "@supabase/supabase-js";
 
-// ── FIREBASE CONFIG ──────────────────────────────────────────────────────────
+// ── FIREBASE CONFIG ───────────────────────────────────────────────────────────
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyCjaty20ZFloU5VrA4OfaqIZwaOnnEKR3k",
   authDomain: "timetrade-c2424.firebaseapp.com",
@@ -63,20 +49,17 @@ const FIREBASE_CONFIG = {
   storageBucket: "timetrade-c2424.firebasestorage.app",
   messagingSenderId: "37103569098",
   appId: "1:37103569098:web:b335e391f91dd1edae8c33",
-  measurementId: "G-L719FYZWWJ"
 };
 
 const SUPABASE_URL      = "https://nsyydxayplotyxwuhdsz.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5zeXlkeGF5cGxvdHl4d3VoZHN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc1NzI2OTYsImV4cCI6MjA5MzE0ODY5Nn0.zvWiDuVUoqSA4zxybp9QSw3c4wVKS1ylpyzsWRb1Qhc";
 
-// ── ZOOM API CONFIG ──────────────────────────────────────────────────────────
-// Paste your credentials from https://marketplace.zoom.us (Server-to-Server OAuth)
-const ZOOM_ACCOUNT_ID    = "GltBoA3-S9253C3P7le-0w";   // ← replace
-const ZOOM_CLIENT_ID     = "esD9Gfz4SzOlI0_n2rkXQ";    // ← replace
-const ZOOM_CLIENT_SECRET = "xyksus44hljdynQHu3HDbkaDpsrKs8Eq"; // ← replace
+// ── ZOOM PROXY URL ────────────────────────────────────────────────────────────
+// Paste your Cloudflare Worker URL here after deploying cloudflare-worker.js
+// Example: "https://zoom-proxy.yourname.workers.dev"
+const ZOOM_PROXY_URL = "https://zoom-proxy.rajeshwarisons3134.workers.dev"; // ← REPLACE THIS
 
-// Set to true once you've filled in real credentials above
-const ZOOM_API_ENABLED = true;
+// ─────────────────────────────────────────────────────────────────────────────
 
 const firebaseApp = getApps().length ? getApps()[0] : initializeApp(FIREBASE_CONFIG);
 const auth        = getAuth(firebaseApp);
@@ -84,7 +67,7 @@ const rtdb        = getDatabase(firebaseApp);
 const gProvider   = new GoogleAuthProvider();
 const supabase    = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// ── RTDB HELPERS ─────────────────────────────────────────────────────────────
+// ── RTDB HELPERS ──────────────────────────────────────────────────────────────
 async function rtGet(path) {
   const snap = await dbGet(dbRef(rtdb, path));
   return snap.exists() ? snap.val() : null;
@@ -98,13 +81,8 @@ function rtListen(path, cb) {
 }
 
 // ── SUPABASE HELPERS ──────────────────────────────────────────────────────────
-// FIX: explicit column list matches actual DB schema
 async function sbInsertRequest(data) {
-  const { data: row, error } = await supabase
-    .from("requests")
-    .insert([data])
-    .select()
-    .single();
+  const { data: row, error } = await supabase.from("requests").insert([data]).select().single();
   if (error) throw new Error(error.message);
   return row;
 }
@@ -112,11 +90,13 @@ async function sbUpdateRequest(id, data) {
   const { error } = await supabase.from("requests").update(data).eq("id", id);
   if (error) throw new Error(error.message);
 }
+async function sbDeleteRequest(id) {
+  const { error } = await supabase.from("requests").delete().eq("id", id);
+  if (error) throw new Error(error.message);
+}
 async function sbGetRequests(field, uid) {
   const { data, error } = await supabase
-    .from("requests")
-    .select("*")
-    .eq(field, uid)
+    .from("requests").select("*").eq(field, uid)
     .order("created_at", { ascending: false });
   if (error) throw new Error(error.message);
   return data || [];
@@ -151,88 +131,40 @@ async function sbUploadCourseImage(file, mentorUid) {
   return data.publicUrl;
 }
 
-// ── ZOOM API ──────────────────────────────────────────────────────────────────
-/**
- * Step 1: Get a short-lived OAuth token from Zoom.
- * NOTE: In production, do this on your backend to keep CLIENT_SECRET safe.
- * A Cloudflare Worker or Vercel Edge Function works great for this.
- */
-async function getZoomAccessToken() {
-  const credentials = btoa(`${ZOOM_CLIENT_ID}:${ZOOM_CLIENT_SECRET}`);
-  const res = await fetch(
-    `https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${ZOOM_ACCOUNT_ID}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${credentials}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-    }
-  );
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(`Zoom token error: ${err.reason || res.statusText}`);
-  }
-  const data = await res.json();
-  return data.access_token;
-}
-
-/**
- * Step 2: Create a scheduled Zoom meeting under the mentor's Zoom account.
- * mentorEmail must match the email registered with your Zoom account.
- */
+// ── ZOOM API (via Cloudflare Worker proxy) ────────────────────────────────────
 async function createZoomMeeting(mentorEmail, learnerName, skill) {
-  if (!ZOOM_API_ENABLED) {
-    // Return a fallback link so the rest of the flow still works during dev
+  // Check proxy URL is configured
+  if (!ZOOM_PROXY_URL || ZOOM_PROXY_URL.includes("YOUR_SUBDOMAIN")) {
+    console.warn("[Zoom] Proxy URL not set — using fallback link");
     return generateFallbackZoomLink(skill);
   }
-  try {
-    const token = await getZoomAccessToken();
-    const body = {
-      topic: `TT Session: ${skill}`,
-      type: 2,                                   // scheduled meeting
-      start_time: new Date(Date.now() + 5 * 60000).toISOString(),
-      duration: 60,
-      timezone: "Asia/Kolkata",
-      agenda: `1-on-1 session: ${skill} — learner: ${learnerName}`,
-      settings: {
-        host_video: true,
-        participant_video: true,
-        join_before_host: false,
-        waiting_room: true,
-        mute_upon_entry: false,
-        auto_recording: "none",
-      },
-    };
 
-    const res = await fetch(`https://api.zoom.us/v2/users/${mentorEmail}/meetings`, {
+  try {
+    const res = await fetch(`${ZOOM_PROXY_URL}?action=create_meeting`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mentorEmail, learnerName, skill }),
     });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.message || "Zoom meeting creation failed");
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      throw new Error(data.detail || data.error || "Proxy returned error");
     }
 
-    const meeting = await res.json();
     return {
-      meetingId: String(meeting.id),
-      joinUrl:   meeting.join_url,
-      startUrl:  meeting.start_url,
-      password:  meeting.password || "",
+      meetingId: data.meetingId,
+      joinUrl:   data.joinUrl,
+      startUrl:  data.startUrl,
+      password:  data.password || "",
     };
   } catch (err) {
-    console.error("[Zoom API]", err);
+    console.error("[Zoom proxy]", err);
     throw err;
   }
 }
 
-/** Fallback used during development or when ZOOM_API_ENABLED = false */
+/** Fallback: generates a dummy Zoom-looking link for development */
 function generateFallbackZoomLink(skill = "") {
   const id  = Math.floor(Math.random() * 9000000000) + 1000000000;
   const pwd = Math.random().toString(36).slice(2, 8).toUpperCase();
@@ -302,7 +234,6 @@ const pillStyle = (active = false, yellow = false, extra = {}) => ({
   boxShadow:  active || yellow ? "none" : `0 0 0 1.5px ${T.border}`,
   ...extra,
 });
-
 const cardStyle = (extra = {}) => ({
   background: T.surface, borderRadius: 20,
   border: `1px solid ${T.border}`,
@@ -310,7 +241,7 @@ const cardStyle = (extra = {}) => ({
   padding: 20, ...extra,
 });
 
-// ── GLOBAL CSS ─────────────────────────────────────────────────────────────────
+// ── GLOBAL CSS ────────────────────────────────────────────────────────────────
 const GLOBAL_CSS = `
   @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;0,9..40,800&display=swap');
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -437,7 +368,6 @@ const ALL_SKILLS = [
   "Machine Learning","SQL","AWS","Kubernetes","Web3",
   "Photography","Music Theory","Technical Writing",
 ];
-
 const SKILL_ICONS = {
   React: Code2, TypeScript: Code2, Python: Cpu, "UI/UX": Palette,
   NodeJS: Database, GraphQL: Globe, Figma: Palette, "Data Science": TrendingUp,
@@ -581,29 +511,20 @@ function CreateCourseModal({ profile, mentorId, onClose, onCreated }) {
         catch { toast("Image upload failed, using default.", "info"); }
       }
       const topicsArr = form.topics.split(",").map((t) => t.trim()).filter(Boolean);
-      const courseData = {
-        mentor_uid:     profile.uid,
-        mentor_name:    profile.displayName,
-        mentor_photo:   imageUrl,
-        mentor_id:      mentorId,
-        mentor_email:   profile.email,
-        title:          form.title.trim(),
-        skill:          form.skill,
-        subtitle:       form.subtitle.trim(),
-        level:          form.level,
-        topics:         topicsArr,
-        credits:        Number(form.credits),
-        rating:         0,
-        sessions_count: 0,
-      };
-      const row = await sbInsertCourse(courseData);
+      const row = await sbInsertCourse({
+        mentor_uid: profile.uid, mentor_name: profile.displayName,
+        mentor_photo: imageUrl, mentor_id: mentorId,
+        mentor_email: profile.email, title: form.title.trim(),
+        skill: form.skill, subtitle: form.subtitle.trim(),
+        level: form.level, topics: topicsArr,
+        credits: Number(form.credits), rating: 0, sessions_count: 0,
+      });
       await rtUpdate(`users/${profile.uid}`, {
-        role:   "mentor",
+        role: "mentor",
         skills: Array.from(new Set([...(profile.skills||[]), form.skill])),
       });
       toast("Course published to Marketplace! 🎉", "success");
-      onCreated(row);
-      onClose();
+      onCreated(row); onClose();
     } catch (e) { toast(e.message, "error"); }
     setSaving(false);
   };
@@ -626,16 +547,12 @@ function CreateCourseModal({ profile, mentorId, onClose, onCreated }) {
             <div style={{ fontWeight:800, fontSize:20 }}>Create Course</div>
             <div style={{ fontSize:13, color:T.muted }}>Publish to the Marketplace</div>
           </div>
-          <button onClick={onClose} style={{ background:"none", border:"none" }}>
-            <X size={20} color={T.muted} />
-          </button>
+          <button onClick={onClose} style={{ background:"none", border:"none" }}><X size={20} color={T.muted} /></button>
         </div>
         <div style={{ flex:1, overflowY:"auto", padding:"22px 24px" }}>
-          {/* Photo upload */}
+          {/* Photo */}
           <div style={{ marginBottom:20 }}>
-            <label style={{ fontSize:13, fontWeight:600, color:T.muted, display:"block", marginBottom:10 }}>
-              Course / Mentor Photo
-            </label>
+            <label style={{ fontSize:13, fontWeight:600, color:T.muted, display:"block", marginBottom:10 }}>Course / Mentor Photo</label>
             <div style={{ display:"flex", alignItems:"center", gap:14 }}>
               <div style={{ width:72, height:72, borderRadius:16, overflow:"hidden",
                 background:T.alt, border:`2px dashed ${T.border}`,
@@ -646,12 +563,10 @@ function CreateCourseModal({ profile, mentorId, onClose, onCreated }) {
                   ? <img src={imagePreview} alt="" style={{ width:"100%", height:"100%", objectFit:"cover" }} />
                   : <ImageIcon size={24} color={T.muted} />}
               </div>
-              <div>
-                <motion.button whileTap={{ scale:0.95 }} onClick={() => fileRef.current?.click()}
-                  style={{ ...pillStyle(false,false,{ padding:"8px 16px", fontSize:13 }) }}>
-                  <Upload size={13} /> Upload Image
-                </motion.button>
-              </div>
+              <motion.button whileTap={{ scale:0.95 }} onClick={() => fileRef.current?.click()}
+                style={{ ...pillStyle(false,false,{ padding:"8px 16px", fontSize:13 }) }}>
+                <Upload size={13} /> Upload Image
+              </motion.button>
               <input ref={fileRef} type="file" accept="image/*" style={{ display:"none" }} onChange={handleImage} />
             </div>
           </div>
@@ -696,7 +611,7 @@ function CreateCourseModal({ profile, mentorId, onClose, onCreated }) {
           {/* Topics */}
           <div style={{ marginBottom:16 }}>
             <label style={{ fontSize:13, fontWeight:600, color:T.muted, display:"block", marginBottom:8 }}>
-              Topics Covered <span style={{ fontWeight:400 }}>(comma-separated)</span>
+              Topics <span style={{ fontWeight:400 }}>(comma-separated)</span>
             </label>
             <input value={form.topics} onChange={(e) => upd("topics", e.target.value)}
               placeholder="e.g. useState, useEffect, Custom Hooks"
@@ -718,9 +633,7 @@ function CreateCourseModal({ profile, mentorId, onClose, onCreated }) {
           <motion.button whileTap={{ scale:0.96 }} disabled={saving} onClick={handleSubmit}
             style={{ ...pillStyle(true, false, { width:"100%", justifyContent:"center",
               padding:"13px", fontSize:15, opacity:saving?0.6:1 }) }}>
-            {saving
-              ? <><Loader2 size={15} className="spin" /> Publishing…</>
-              : <><Sparkles size={15} /> Publish to Marketplace</>}
+            {saving ? <><Loader2 size={15} className="spin" /> Publishing…</> : <><Sparkles size={15} /> Publish to Marketplace</>}
           </motion.button>
         </div>
       </motion.div>
@@ -817,15 +730,11 @@ function CourseCard({ course, profile, onRequest }) {
           )}
         </div>
       </motion.div>
-
       <AnimatePresence>
         {reqModal && (
-          <ZoomRequestModal
-            course={course}
-            profile={profile}
+          <ZoomRequestModal course={course} profile={profile}
             onClose={() => setReqModal(false)}
-            onConfirm={() => { onRequest(course); setReqModal(false); }}
-          />
+            onConfirm={() => { onRequest(course); setReqModal(false); }} />
         )}
       </AnimatePresence>
     </>
@@ -864,13 +773,9 @@ function ZoomRequestModal({ course, profile, onClose, onConfirm }) {
         </div>
         <div style={{ background:"#DBEAFE", borderRadius:12, padding:"12px 14px", marginBottom:20 }}>
           <div style={{ fontWeight:700, fontSize:13, color:"#1e40af", marginBottom:8 }}>How it works:</div>
-          {[
-            "1. Request sent to mentor",
-            "2. Mentor approves → Zoom meeting auto-created",
-            "3. 1 credit deducted from your account",
-            "4. Both join via the Zoom link",
-          ].map((step) => (
-            <div key={step} style={{ fontSize:13, color:"#1e40af", marginBottom:4 }}>{step}</div>
+          {["1. Request sent to mentor","2. Mentor approves → Zoom meeting auto-created",
+            "3. 1 credit deducted from your account","4. Both join via the Zoom link"].map((s) => (
+            <div key={s} style={{ fontSize:13, color:"#1e40af", marginBottom:4 }}>{s}</div>
           ))}
         </div>
         <div style={{ background:T.yellowLt, borderRadius:12, padding:"10px 14px",
@@ -884,9 +789,7 @@ function ZoomRequestModal({ course, profile, onClose, onConfirm }) {
           onClick={() => { setLoading(true); onConfirm(); }}
           style={{ ...pillStyle(true, false, { width:"100%", justifyContent:"center",
             padding:"13px", fontSize:15, opacity:loading?0.6:1 }) }}>
-          {loading
-            ? <><Loader2 size={15} className="spin" /> Sending…</>
-            : <><Video size={15} /> Send Zoom Request</>}
+          {loading ? <><Loader2 size={15} className="spin" /> Sending…</> : <><Video size={15} /> Send Zoom Request</>}
         </motion.button>
       </motion.div>
     </motion.div>
@@ -912,7 +815,6 @@ function Marketplace({ profile }) {
   }, []);
 
   const categories = ["All", ...new Set(courses.map((c) => c.skill))];
-
   const filtered = courses.filter((c) => {
     const byCat    = category === "All" || c.skill === category;
     const bySearch = !search ||
@@ -923,48 +825,21 @@ function Marketplace({ profile }) {
     return byCat && bySearch;
   });
 
-  // ── FIX: handleRequest now receives the full course object ────────────────
   const handleRequest = async (course) => {
-    if (!course?.id) {
-      toast("Course data is missing. Please refresh and try again.", "error");
-      return;
-    }
-    if ((profile.credits||0) < (course.credits||1)) {
-      toast("Not enough credits", "error");
-      return;
-    }
-    if (profile.uid === course.mentor_uid) {
-      toast("You can't book your own course.", "error");
-      return;
-    }
+    if (!course?.id)                                 { toast("Course data missing. Refresh.", "error"); return; }
+    if ((profile.credits||0) < (course.credits||1)) { toast("Not enough credits", "error"); return; }
+    if (profile.uid === course.mentor_uid)           { toast("You can't book your own course.", "error"); return; }
     setReqLoading(true);
     try {
-      // Build the request row with all columns that exist in the DB
-      const requestPayload = {
-        learner_uid:   profile.uid,
-        learner_name:  profile.displayName,
-        mentor_uid:    course.mentor_uid,
-        mentor_name:   course.mentor_name,
-        skill:         course.skill,
-        // ── FIX: these two fields are now correctly included ────────────────
-        course_id:     course.id,          // UUID from supabase courses table
-        course_title:  course.title,
-        // ────────────────────────────────────────────────────────────────────
-        status:        "pending",
-        credit_escrow: true,
-        confirmed_by:  {},
-        meet_link:     "",
-        zoom_meeting_id: null,
-        zoom_password:   null,
-      };
-
-      await sbInsertRequest(requestPayload);
+      await sbInsertRequest({
+        learner_uid: profile.uid, learner_name: profile.displayName,
+        mentor_uid: course.mentor_uid, mentor_name: course.mentor_name,
+        skill: course.skill, course_id: course.id, course_title: course.title,
+        status: "pending", credit_escrow: true, confirmed_by: {},
+        meet_link: "", zoom_meeting_id: null, zoom_password: null,
+      });
       toast("Zoom request sent! Credit deducted on approval 🔒", "success");
-    } catch (e) {
-      // Surface the actual Supabase error so you can debug column issues
-      toast("Request failed: " + e.message, "error");
-      console.error("[handleRequest]", e);
-    }
+    } catch (e) { toast("Request failed: " + e.message, "error"); }
     setReqLoading(false);
   };
 
@@ -988,7 +863,6 @@ function Marketplace({ profile }) {
           </div>
         ))}
       </div>
-
       <div style={{ position:"relative", marginBottom:18 }}>
         <Search size={15} color={T.muted} style={{ position:"absolute", left:14, top:"50%", transform:"translateY(-50%)" }} />
         <input value={search} onChange={(e) => setSearch(e.target.value)}
@@ -996,7 +870,6 @@ function Marketplace({ profile }) {
           style={{ width:"100%", padding:"12px 14px 12px 40px", borderRadius:12,
             border:`1.5px solid ${T.border}`, background:T.surface, fontSize:14, outline:"none" }} />
       </div>
-
       {categories.length > 1 && (
         <div style={{ display:"flex", gap:8, overflowX:"auto", paddingBottom:6, marginBottom:20 }}>
           {categories.map((cat) => (
@@ -1007,19 +880,16 @@ function Marketplace({ profile }) {
           ))}
         </div>
       )}
-
       <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16 }}>
         <div style={{ fontWeight:700, fontSize:16 }}>
           {category==="All" ? "All Courses" : category}
           <span style={{ color:T.muted, fontWeight:400, fontSize:14 }}> · {filtered.length} available</span>
         </div>
         {(profile.credits||0) < 1 && (
-          <div style={{ background:"#FEE2E2", color:"#991b1b", borderRadius:99, padding:"4px 12px", fontSize:12, fontWeight:600 }}>
-            ⚠️ Need credits to book
-          </div>
+          <div style={{ background:"#FEE2E2", color:"#991b1b", borderRadius:99,
+            padding:"4px 12px", fontSize:12, fontWeight:600 }}>⚠️ Need credits to book</div>
         )}
       </div>
-
       {loading ? (
         <div style={{ textAlign:"center", padding:80, color:T.muted }}>
           <Loader2 size={28} className="spin" style={{ marginBottom:10 }} />
@@ -1068,11 +938,8 @@ function MentorDashboard({ profile, mentorId, onExit }) {
 
   const fetchRequests = useCallback(async () => {
     setLoading(true);
-    try {
-      const rows = await sbGetRequests("mentor_uid", profile.uid);
-      setRequests(rows);
-      setLastRefresh(new Date());
-    } catch(e) { toast("Could not load requests: "+e.message, "error"); }
+    try { setRequests(await sbGetRequests("mentor_uid", profile.uid)); setLastRefresh(new Date()); }
+    catch(e) { toast("Could not load requests: "+e.message, "error"); }
     setLoading(false);
   }, [profile.uid]);
 
@@ -1088,42 +955,30 @@ function MentorDashboard({ profile, mentorId, onExit }) {
 
   const setOne = (id, v) => setBusy((p) => ({ ...p, [id]: v }));
 
-  // ── FIX: handleApprove now calls createZoomMeeting correctly ──────────────
+  // ── Approve: calls Cloudflare Worker proxy ────────────────────────────────
   const handleApprove = async (req) => {
     setOne(req.id, "approving");
     try {
-      toast("Creating Zoom meeting…", "info");
-
+      toast("Creating Zoom meeting via proxy…", "info");
       let zoomData;
       try {
-        zoomData = await createZoomMeeting(
-          profile.email,       // mentor's email (must be on your Zoom account)
-          req.learner_name,
-          req.skill
-        );
+        zoomData = await createZoomMeeting(profile.email, req.learner_name, req.skill);
       } catch (zoomErr) {
-        // If Zoom API fails, fall back to a placeholder link
-        toast("Zoom API unavailable — using fallback link.", "info");
+        toast("Zoom unavailable — using fallback link.", "info");
         zoomData = generateFallbackZoomLink(req.skill);
       }
-
       await sbUpdateRequest(req.id, {
-        status:          "approved",
-        meet_link:       zoomData.joinUrl,
-        zoom_meeting_id: zoomData.meetingId,
-        zoom_password:   zoomData.password,
-        confirmed_by:    { mentor: true },
+        status: "approved", meet_link: zoomData.joinUrl,
+        zoom_meeting_id: zoomData.meetingId, zoom_password: zoomData.password,
+        confirmed_by: { mentor: true },
       });
-
-      // Deduct learner credit
-      const learnerCredits = await rtGet(`users/${req.learner_uid}/credits`);
-      if ((learnerCredits||0) >= 1) {
-        await rtUpdate(`users/${req.learner_uid}`, { credits: (learnerCredits||0) - 1 });
+      const lc = await rtGet(`users/${req.learner_uid}/credits`);
+      if ((lc||0) >= 1) {
+        await rtUpdate(`users/${req.learner_uid}`, { credits: (lc||0) - 1 });
         toast("Approved! Zoom link created. 1 credit deducted ✅", "success");
       } else {
         toast("Approved (learner has no credits).", "info");
       }
-
       const ms = await rtGet(`users/${profile.uid}/sessionsAsMentor`);
       await rtUpdate(`users/${profile.uid}`, { sessionsAsMentor: (ms||0)+1 });
       fetchRequests();
@@ -1134,15 +989,27 @@ function MentorDashboard({ profile, mentorId, onExit }) {
   const handleDecline = async (req) => {
     setOne(req.id, "declining");
     try {
-      await sbUpdateRequest(req.id, { status:"declined" });
+      await sbUpdateRequest(req.id, { status: "declined" });
       toast("Request declined.", "info");
       fetchRequests();
     } catch(e) { toast(e.message, "error"); }
     setOne(req.id, false);
   };
 
+  // ── NEW: Delete any request (approved/completed/declined) ─────────────────
+  const handleDeleteRequest = async (req) => {
+    if (!window.confirm(`Delete this request from ${req.learner_name}?`)) return;
+    setOne(req.id, "deleting");
+    try {
+      await sbDeleteRequest(req.id);
+      setRequests((prev) => prev.filter((r) => r.id !== req.id));
+      toast("Request deleted.", "info");
+    } catch(e) { toast("Delete failed: " + e.message, "error"); }
+    setOne(req.id, false);
+  };
+
   const handleDeleteCourse = async (courseId) => {
-    if (!confirm("Delete this course?")) return;
+    if (!window.confirm("Delete this course?")) return;
     try {
       await sbDeleteCourse(courseId);
       setCourses((p) => p.filter((c) => c.id !== courseId));
@@ -1156,10 +1023,8 @@ function MentorDashboard({ profile, mentorId, onExit }) {
     if (tab==="declined") return r.status==="declined";
     return true;
   });
-
   const pendingCount  = requests.filter((r) => r.status==="pending").length;
   const approvedCount = requests.filter((r) => ["approved","confirming","completed"].includes(r.status)).length;
-
   const stats = [
     { label:"Pending",  value:pendingCount,                icon:Clock,       color:"#92400e", bg:"#FEF3C7" },
     { label:"Approved", value:approvedCount,               icon:CheckCircle, color:T.success, bg:"#D1FAE5" },
@@ -1187,7 +1052,7 @@ function MentorDashboard({ profile, mentorId, onExit }) {
         <div style={{ flex:1 }} />
         <div style={{ display:"flex", alignItems:"center", gap:6,
           background:T.dark, borderRadius:999, padding:"8px 16px" }}>
-          <motion.div className="pulse"><Coins size={14} color={T.yellow} /></motion.div>
+          <span className="pulse"><Coins size={14} color={T.yellow} /></span>
           <AnimatedCredits value={profile.credits||0} size={18} />
           <span style={{ fontSize:12, color:"rgba(255,255,255,0.5)", fontWeight:400 }}>credits</span>
         </div>
@@ -1216,16 +1081,14 @@ function MentorDashboard({ profile, mentorId, onExit }) {
             </div>
           </div>
           <motion.button whileTap={{ scale:0.96 }} onClick={() => setShowCreate(true)}
-            style={{ ...pillStyle(true, false, { padding:"11px 20px", fontSize:14,
-              background:T.mentor, color:"#fff" }) }}>
+            style={{ ...pillStyle(true, false, { padding:"11px 20px", fontSize:14, background:T.mentor, color:"#fff" }) }}>
             <Plus size={15} /> Create Course
           </motion.button>
         </div>
 
         <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))", gap:12, marginBottom:28 }}>
           {stats.map(({ label, value, icon:Icon, color, bg }) => (
-            <div key={label} style={{ ...cardStyle({ padding:"16px 18px" }),
-              display:"flex", alignItems:"center", gap:12 }}>
+            <div key={label} style={{ ...cardStyle({ padding:"16px 18px" }), display:"flex", alignItems:"center", gap:12 }}>
               <div style={{ width:38, height:38, borderRadius:10, background:bg,
                 display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
                 <Icon size={17} color={color} />
@@ -1251,9 +1114,7 @@ function MentorDashboard({ profile, mentorId, onExit }) {
             </motion.button>
           </div>
           {coursesLoad ? (
-            <div style={{ textAlign:"center", padding:40, color:T.muted }}>
-              <Loader2 size={22} className="spin" />
-            </div>
+            <div style={{ textAlign:"center", padding:40, color:T.muted }}><Loader2 size={22} className="spin" /></div>
           ) : courses.length === 0 ? (
             <div style={{ textAlign:"center", padding:"40px 20px", color:T.muted }}>
               <BookOpen size={32} style={{ marginBottom:10, opacity:0.3 }} />
@@ -1271,7 +1132,7 @@ function MentorDashboard({ profile, mentorId, onExit }) {
                 const iconBg    = SKILL_BG[course.skill]    || "#DBEAFE";
                 return (
                   <div key={course.id} style={{ background:T.alt, borderRadius:14, padding:16,
-                    border:`1px solid ${T.border}`, position:"relative" }}>
+                    border:`1px solid ${T.border}` }}>
                     <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:10 }}>
                       {course.mentor_photo
                         ? <img src={course.mentor_photo} alt=""
@@ -1290,9 +1151,7 @@ function MentorDashboard({ profile, mentorId, onExit }) {
                     </div>
                     <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"space-between" }}>
                       <span style={{ fontSize:12, color:"#065f46", background:"#D1FAE5",
-                        borderRadius:99, padding:"3px 10px", fontWeight:600 }}>
-                        ✓ Live in Marketplace
-                      </span>
+                        borderRadius:99, padding:"3px 10px", fontWeight:600 }}>✓ Live</span>
                       <motion.button whileTap={{ scale:0.9 }} onClick={() => handleDeleteCourse(course.id)}
                         style={{ background:"#FEE2E2", border:"none", borderRadius:8,
                           padding:"6px 8px", cursor:"pointer", display:"flex", alignItems:"center" }}>
@@ -1306,7 +1165,7 @@ function MentorDashboard({ profile, mentorId, onExit }) {
           )}
         </div>
 
-        {/* Requests */}
+        {/* Session Requests */}
         <div style={{ fontWeight:700, fontSize:18, letterSpacing:"-0.5px", marginBottom:14 }}>Session Requests</div>
         <div style={{ display:"flex", gap:8, marginBottom:20, flexWrap:"wrap" }}>
           {[
@@ -1336,7 +1195,10 @@ function MentorDashboard({ profile, mentorId, onExit }) {
             <AnimatePresence>
               {filtered.map((req) => (
                 <MentorRequestCard key={req.id} req={req}
-                  busy={busy[req.id]} onApprove={handleApprove} onDecline={handleDecline} />
+                  busy={busy[req.id]}
+                  onApprove={handleApprove}
+                  onDecline={handleDecline}
+                  onDelete={handleDeleteRequest} />
               ))}
             </AnimatePresence>
           </div>
@@ -1347,16 +1209,18 @@ function MentorDashboard({ profile, mentorId, onExit }) {
         {showCreate && (
           <CreateCourseModal profile={profile} mentorId={mentorId}
             onClose={() => setShowCreate(false)}
-            onCreated={(row) => { setCourses((p) => [row, ...p]); }} />
+            onCreated={(row) => setCourses((p) => [row, ...p])} />
         )}
       </AnimatePresence>
     </div>
   );
 }
 
-// ── MENTOR REQUEST CARD ───────────────────────────────────────────────────────
-function MentorRequestCard({ req, busy, onApprove, onDecline }) {
+// ── MENTOR REQUEST CARD (with delete button) ──────────────────────────────────
+function MentorRequestCard({ req, busy, onApprove, onDecline, onDelete }) {
   const [expanded, setExpanded] = useState(false);
+  const isNonPending = ["approved","confirming","completed","declined"].includes(req.status);
+
   return (
     <motion.div layout initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }}
       exit={{ opacity:0, scale:0.97 }}
@@ -1391,7 +1255,9 @@ function MentorRequestCard({ req, busy, onApprove, onDecline }) {
             </div>
           </div>
         </div>
+
         <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"center" }}>
+          {/* Pending actions */}
           {req.status==="pending" && (
             <>
               <motion.button whileTap={{ scale:0.93 }}
@@ -1412,18 +1278,39 @@ function MentorRequestCard({ req, busy, onApprove, onDecline }) {
               </motion.button>
             </>
           )}
+
+          {/* Join Zoom button for approved sessions */}
           {["approved","confirming","completed"].includes(req.status) && req.meet_link && (
             <a href={req.meet_link} target="_blank" rel="noopener noreferrer"
               style={{ ...pillStyle(false, true, { padding:"9px 18px", fontSize:13, textDecoration:"none" }) }}>
               <Video size={13} /> Join Zoom
             </a>
           )}
+
+          {/* DELETE button — shown for all non-pending statuses */}
+          {isNonPending && (
+            <motion.button whileTap={{ scale:0.93 }}
+              disabled={busy==="deleting"} onClick={() => onDelete(req)}
+              style={{ background:"#FEE2E2", border:"none", borderRadius:10,
+                padding:"9px 12px", cursor:"pointer", display:"flex", alignItems:"center", gap:6,
+                fontSize:13, fontWeight:600, color:T.danger,
+                opacity:busy==="deleting"?0.5:1 }}>
+              {busy==="deleting"
+                ? <Loader2 size={13} className="spin" />
+                : <Trash2 size={13} />}
+              {busy==="deleting" ? "Deleting…" : "Delete"}
+            </motion.button>
+          )}
+
+          {/* Expand toggle */}
           <motion.button whileTap={{ scale:0.93 }} onClick={() => setExpanded(!expanded)}
             style={{ ...pillStyle(false, false, { padding:"9px 14px", fontSize:13 }) }}>
             <ChevronRight size={14} style={{ transform:expanded?"rotate(90deg)":"rotate(0deg)", transition:"0.2s" }} />
           </motion.button>
         </div>
       </div>
+
+      {/* Expanded details */}
       <AnimatePresence>
         {expanded && (
           <motion.div initial={{ height:0, opacity:0 }} animate={{ height:"auto", opacity:1 }}
@@ -1462,9 +1349,7 @@ function MentorRequestCard({ req, busy, onApprove, onDecline }) {
                   <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                     <div style={{ flex:1, fontSize:12, color:"#1d4ed8", fontFamily:"monospace",
                       background:"#DBEAFE", borderRadius:8, padding:"8px 12px",
-                      wordBreak:"break-all", lineHeight:1.5 }}>
-                      {req.meet_link}
-                    </div>
+                      wordBreak:"break-all", lineHeight:1.5 }}>{req.meet_link}</div>
                     <a href={req.meet_link} target="_blank" rel="noopener noreferrer"
                       style={{ ...pillStyle(false, false, { padding:"8px 12px", fontSize:12, textDecoration:"none" }) }}>
                       <ExternalLink size={13} />
@@ -1556,7 +1441,6 @@ function Requests({ profile }) {
               const myRole    = profile.uid===req.mentor_uid ? "mentor" : "learner";
               const confirmed = req.confirmed_by?.[myRole];
               const showConfirm = (req.status==="approved"||req.status==="confirming") && !confirmed;
-              const isLoading = busy[req.id];
               return (
                 <motion.div key={req.id} layout initial={{ opacity:0, y:12 }} animate={{ opacity:1, y:0 }}
                   style={{ ...cardStyle() }}>
@@ -1593,9 +1477,9 @@ function Requests({ profile }) {
                       )}
                       {showConfirm && (
                         <motion.button whileTap={{ scale:0.93 }}
-                          disabled={isLoading} onClick={() => confirm(req)}
+                          disabled={busy[req.id]} onClick={() => confirm(req)}
                           style={{ ...pillStyle(false, false, { padding:"8px 16px", fontSize:13 }) }}>
-                          {isLoading ? <Loader2 size={13} className="spin" /> : <Check size={13} />}
+                          {busy[req.id] ? <Loader2 size={13} className="spin" /> : <Check size={13} />}
                           Confirm Done
                         </motion.button>
                       )}
@@ -1641,8 +1525,7 @@ function ProfilePage({ profile }) {
   };
 
   const skillObjs = (profile.skills||[])
-    .map((s) => typeof s==="string" ? { name:s, count:1 } : s)
-    .filter(Boolean);
+    .map((s) => typeof s==="string" ? { name:s, count:1 } : s).filter(Boolean);
 
   const stats = [
     { label:"Credits",   value:<AnimatedCredits value={profile.credits||0} size={26} />, icon:<Coins size={15} color={T.yellow} /> },
@@ -1742,8 +1625,7 @@ function MentorIdGate({ profile, onEnterMentorDashboard, onContinueAsLearner }) 
       if (!isValid) { setError("Invalid Mentor ID or it doesn't belong to you."); setChecking(false); return; }
       await rtUpdate(`users/${profile.uid}`, {
         mentorId: mentorId.trim().toUpperCase(), role:"mentor",
-        skills: Array.isArray(profile.skills) && profile.skills.length > 0
-          ? profile.skills : ["React","Python","SQL"],
+        skills: Array.isArray(profile.skills) && profile.skills.length > 0 ? profile.skills : ["React","Python","SQL"],
       });
       toast("Mentor dashboard unlocked 🎉","success");
       onEnterMentorDashboard(mentorId.trim().toUpperCase());
@@ -1832,12 +1714,12 @@ function MentorIdGate({ profile, onEnterMentorDashboard, onContinueAsLearner }) 
   );
 }
 
-// ── WALLET + LOGIN + NAV (unchanged) ─────────────────────────────────────────
+// ── WALLET + NAV + LOGIN ──────────────────────────────────────────────────────
 function WalletWidget({ credits }) {
   return (
     <div style={{ display:"flex", alignItems:"center", gap:6,
       background:T.dark, borderRadius:999, padding:"8px 16px" }}>
-      <motion.div className="pulse"><Coins size={14} color={T.yellow} /></motion.div>
+      <span className="pulse"><Coins size={14} color={T.yellow} /></span>
       <AnimatedCredits value={credits||0} size={18} />
       <span style={{ fontSize:12, color:"rgba(255,255,255,0.5)", fontWeight:400 }}>credits</span>
     </div>
@@ -1951,10 +1833,7 @@ function App() {
   const [activeMentorId, setActiveMentorId] = useState(null);
   const [page,           setPage]           = useState("marketplace");
 
-  useEffect(() => {
-    if (!profile || mode !== null) return;
-    setMode("gate");
-  }, [profile]);
+  useEffect(() => { if (!profile || mode !== null) return; setMode("gate"); }, [profile]);
 
   if (user === undefined)        return <FullLoader />;
   if (!user)                     return <LoginScreen onLogin={login} />;
@@ -1988,7 +1867,6 @@ function App() {
     requests:    "Your Requests",
     profile:     "Your Profile",
   }[page];
-
   const pageSub = {
     marketplace: "Browse mentor-created courses — request a Zoom session, credit deducted on approval",
     requests:    "Track your Zoom session requests",
@@ -1998,13 +1876,11 @@ function App() {
   return (
     <div style={{ minHeight:"100vh", background:T.bg }}>
       <GlobalStyles />
-      <Navbar
-        page={page} onNav={setPage} profile={profile} onLogout={logout}
+      <Navbar page={page} onNav={setPage} profile={profile} onLogout={logout}
         onMentorDash={() => {
           if (profile.mentorId) { setActiveMentorId(profile.mentorId); setMode("mentor"); }
           else setMode("gate");
-        }}
-      />
+        }} />
       <main style={{ maxWidth:1120, margin:"0 auto", padding:"28px 20px 60px" }}>
         <AnimatePresence mode="wait">
           <motion.div key={page+"_head"}
@@ -2037,6 +1913,5 @@ export function Root() {
     </ToastProvider>
   );
 }
-
 export default App;
 export { ToastProvider, AuthProvider };
