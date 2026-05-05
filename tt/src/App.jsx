@@ -1,34 +1,3 @@
-// ╔══════════════════════════════════════════════════════════════════════════╗
-// ║  TT — Time Trade  |  Fixed: course_id schema + Zoom API setup guide     ║
-// ╚══════════════════════════════════════════════════════════════════════════╝
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ZOOM API SETUP — READ THIS FIRST
-// ─────────────────────────────────────────────────────────────────────────────
-// 1. Go to https://marketplace.zoom.us/develop/create
-// 2. Choose "Server-to-Server OAuth" app type
-// 3. Fill in app name → click Create
-// 4. From "App Credentials" tab, copy:
-//      Account ID   → paste into ZOOM_ACCOUNT_ID below
-//      Client ID    → paste into ZOOM_CLIENT_ID below
-//      Client Secret → paste into ZOOM_CLIENT_SECRET below
-// 5. Go to "Scopes" tab → Add scope: meeting:write:admin  AND  meeting:write
-// 6. Activate the app (toggle at top right)
-//
-// SUPABASE — Add these columns to your "requests" table if missing:
-//   course_id      text   (nullable)
-//   course_title   text   (nullable)
-//   zoom_meeting_id text  (nullable)
-//   zoom_password   text  (nullable)
-//
-//   Run in Supabase SQL editor:
-//   ALTER TABLE requests
-//     ADD COLUMN IF NOT EXISTS course_id      text,
-//     ADD COLUMN IF NOT EXISTS course_title   text,
-//     ADD COLUMN IF NOT EXISTS zoom_meeting_id text,
-//     ADD COLUMN IF NOT EXISTS zoom_password   text;
-// ─────────────────────────────────────────────────────────────────────────────
-
 import {
   useState, useEffect, useContext, createContext,
   useRef, useCallback, memo,
